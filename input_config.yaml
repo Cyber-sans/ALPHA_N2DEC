@@ -1,0 +1,21 @@
+inputs:
+  temperature: 100   # You don't need it if you are going to do temperature optimization
+  num_electrodes: 14
+  center_index: 5
+  density: 6.2e13   # Use scientific notation for yaml, it will treat 62e12 as string!!!
+  num_positrons: 0.11e6
+  num_be_ions: 0.33e6
+  temp_factor: 0.50
+  accuracy: 2.0e-8   # 2.0e-8 is good
+  diameter: 44.55e-3
+  default_length: 20.05e-3
+  electrode_profile: [0, 72, 72, 72, -72, 72, 72, 72, 72, 72, 72, 72, 72, 0]
+  mcp_path: "0840_38.764.tif"
+  optimize_temp: True
+  optimize_num_pos: True
+  optimize_num_be_ions: True
+  optimize_density: True
+  fit_method: "interpolate"   # "interpolate" or "bin"
+  calculate_error: True
+  use_processed_mcp: False
+  processed_mcp_path: 'radial_profile0840_38.764.txt'
