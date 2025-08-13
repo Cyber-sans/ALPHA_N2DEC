@@ -4,10 +4,13 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import label
 from scipy.ndimage import binary_fill_holes
 from scipy.ndimage import center_of_mass
+from scipy.ndimage import map_coordinates
 from scipy.spatial.distance import cdist
+from scipy.ndimage import gaussian_filter1d
 from skimage.measure import EllipseModel
 from matplotlib.patches import Ellipse
 from scipy import stats
+from scipy.optimize import curve_fit
 
 
 # File containing helper function related to analyzing original mcp image and extracting radial profile
@@ -18,8 +21,10 @@ def mcp_image_analyzer(original_mcp_path, run_number):
     Given raw mcp image file, analyzes the image, generates auto mask,
     detects plasma edge, fits ellipse, and returns radial density profile.
     """
-    mcp_tif = os.path.join(os.getcwd(), "mcp_results", "originals", original_mcp_path)
-    mcp_analysis_dir = os.path.join(os.getcwd(), "mcp_results", f"{run_number}")
+    mcp_tif = os.path.join(os.getcwd(), "mcp_results",
+                           "originals", original_mcp_path)
+    mcp_analysis_dir = os.path.join(
+        os.getcwd(), "mcp_results", f"{run_number}")
     os.makedirs(mcp_analysis_dir, exist_ok=True)
 
     print(f"Reading MCP image: {mcp_tif}")
@@ -90,17 +95,17 @@ def mcp_image_analyzer(original_mcp_path, run_number):
     intensity = total_intensity - background_int
 
     print(f"Net Intensity (NNI): {intensity:.2e}")
-       
+
     # Plot
-    plt.figure(figsize=(15,4))
-    plt.subplot(1,3,1)
+    plt.figure(figsize=(15, 4))
+    plt.subplot(1, 3, 1)
     plt.title('Auto-mask')
     plt.imshow(mask_image, cmap='gray')
-    plt.subplot(1,3,2)
+    plt.subplot(1, 3, 2)
     plt.title('MCP with Mask')
     plt.imshow(masked_mcp, cmap='plasma')
     plt.contour(mask_image, colors='r')
-    plt.subplot(1,3,3)
+    plt.subplot(1, 3, 3)
     plt.title('Original Image')
     plt.imshow(mcp_image, cmap='plasma')
     plt.tight_layout()
@@ -166,8 +171,10 @@ def mcp_image_analyzer(original_mcp_path, run_number):
     # Plot the edge points over the MCP image
     plt.figure(figsize=(8, 8))
     plt.imshow(mcp_image_clean, cmap='plasma', origin='upper')
-    plt.plot(ex_coord, ey_coord, 'r.', markersize=1, label='Detected Plasma Edge')
-    plt.scatter([x_c_rough], [y_c_rough], color='white', s=5, label='Estimated Center')
+    plt.plot(ex_coord, ey_coord, 'r.', markersize=1,
+             label='Detected Plasma Edge')
+    plt.scatter([x_c_rough], [y_c_rough], color='white',
+                s=5, label='Estimated Center')
     plt.title("Detected Plasma Boundary")
     plt.legend()
     plt.tight_layout()
@@ -224,7 +231,7 @@ def mcp_image_analyzer(original_mcp_path, run_number):
 
     # Overlay fitted ellipse on MCP image
     fig2 = plt.figure(figsize=(8, 8))
-    plt.imshow(mcp_image, cmap='plasma')
+    plt.imshow(mcp_image_clean, cmap='plasma')
     ellipse_patch = Ellipse(
         (xc, yc), width=2*a, height=2*b, angle=np.degrees(theta),
         edgecolor='cyan', facecolor='none', linewidth=1
@@ -252,7 +259,8 @@ def mcp_image_analyzer(original_mcp_path, run_number):
         # phi: chord angle in image coordinates (from x-axis)
         # theta: rotation of major axis (from x-axis)
         phi_rel = phi - theta
-        r_ellipse = (a * b) / np.sqrt((b * np.cos(phi_rel))**2 + (a * np.sin(phi_rel))**2)
+        r_ellipse = (a * b) / np.sqrt((b * np.cos(phi_rel))
+                                      ** 2 + (a * np.sin(phi_rel))**2)
         return r_ellipse / np.sqrt(a * b)
 
     chords = []
@@ -269,7 +277,7 @@ def mcp_image_analyzer(original_mcp_path, run_number):
             else:
                 values.append(0)
         chords.append(values)
-    
+
     chords = np.array(chords)
 
     # Sum over all chords at each radius (i.e., for each annulus)
@@ -306,18 +314,19 @@ def mcp_image_analyzer(original_mcp_path, run_number):
 
     # Normalize
     # density = density / np.max(density)
-    
+
     # Clip Noisy Edges
     density = density[5:-3]
     radius_centers = radius_centers[5:-3]
 
     # Adding bins to radius_centers (and pad density with the last value) until you reach at least 1.5 mm.
     while radius_centers[-1] < 1.5:
-        radius_centers = np.append(radius_centers, radius_centers[-1] + b_calibration_factor)
+        radius_centers = np.append(
+            radius_centers, radius_centers[-1] + b_calibration_factor)
         density = np.append(density, density[-1])
 
     # Plot
-    plt.figure(figsize=(8,6))
+    plt.figure(figsize=(8, 6))
     plt.plot(radius_centers, density, '+', color='black')
     plt.xlabel("Distance from Plasma Center [mm]")
     plt.ylabel("Axially Integrated Density")
@@ -325,15 +334,146 @@ def mcp_image_analyzer(original_mcp_path, run_number):
     plt.title("MCP Radial Density Profile")
     plt.tight_layout()
     plt.savefig(os.path.join(mcp_analysis_dir, "radial_profile.png"))
+    plt.show()
     plt.close()
     print("Radial profile plot saved to " + mcp_analysis_dir)
+
+    print("Started experiment")
+
+    xc, yc, a, b, theta = ell.params
+    center = np.array([xc, yc])
+
+    # Here follows a later edition by Rhys Brown to get the radial density profile by improving on the code written by the prophet Deniz Yoldaz
+    ############################
+
+    NNIs = []
+    Rs = []
+
+    max_r = int(chordlength)
+    spacing = 4
+
+    bg = np.percentile(masked_mcp, 25)
+    masked_mcp -= bg
+
+    H, W = mcp_image_clean.shape
+    for r in range(int(a*5/6), int(max_r * 5/6)):
+
+        circum = 2 * np.pi * r
+
+        numPoints = max(4, int(circum / spacing))
+
+        phi = np.linspace(0, 2 * np.pi, numPoints, endpoint=False)
+
+        x = xc + r * np.cos(phi) * np.cos(theta) - r * b/a * \
+            np.sin(phi) * np.sin(theta)
+        y = yc + r * np.cos(phi) * np.sin(theta) + r * b/a * \
+            np.sin(phi) * np.cos(theta)
+
+        valid = (x >= 0) & (x < W) & (y >= 0) & (y < H)
+        if valid.mean() < 0.7:  # If > 30% is out of bounds, *Brooklyn accent* forgettt about itttt
+            continue
+
+        vals = map_coordinates(
+            # interpolates decimal image positions
+            mcp_image_clean, [y[valid], x[valid]], order=1, mode="constant", cval=np.nan)
+
+        ringMean = max(0, np.nanmean(vals))
+
+        NNIs.append(max(0, ringMean))
+        Rs.append(np.sqrt(r**2 * b / a)*b_calibration_factor)
+
+    NNIs_sm = gaussian_filter1d(np.array(NNIs), sigma=3.0)
+
+    def getPositronRadius(path):
+        img = plt.imread(path).astype(float)
+
+        bg = np.percentile(img, 10)
+        thr = bg + 4*np.std(img[img <= bg])
+        mask = img > thr
+
+        lab, n = label(mask)
+        if n == 0:
+            return 0.0
+
+        # counts how many pixels belong to each label and then picks the one with the most assigned to it
+        sizes = np.bincount(lab.ravel())
+        sizes[0] = 0
+        mask = binary_fill_holes(lab == sizes.argmax())
+
+        cy, cx = center_of_mass(mask)
+        H, W = mask.shape
+
+        # simple marching algorithm,
+        ang = np.linspace(0, np.pi, 5, endpoint=False)
+        radii = []
+        for a in ang:
+            c, s = np.cos(a), np.sin(a)
+            r1 = r2 = 0.0
+            while True:
+                x = int(cx + r1*c)
+                y = int(cy + r1*s)
+                if 0 <= x < W and 0 <= y < H and mask[y, x]:
+                    r1 += 1.0
+                else:
+                    break
+            while True:
+                x = int(cx - r2*c)
+                y = int(cy - r2*s)
+                if 0 <= x < W and 0 <= y < H and mask[y, x]:
+                    r2 += 1.0
+                else:
+                    break
+            radii.append(0.5*(r1 + r2))
+
+        # median not mean because some chords go crazy wrong
+        return float(np.median(radii))
+
+    positronRadius = getPositronRadius(
+        "C:/Users/Acer Predator/Documents/ALPHA/PROJECXT 3/gitRepository/ALPHA_N2DEC/mcp_results/originals/1129_40.883.tif", )
+
+    print("Positron Radius: " + str(positronRadius))
+
+    magStrength_i = 0.01  # ATDS MCP
+    magStrength_f = 3.1  # In ATM trap
+
+    expansionFactor = np.sqrt(magStrength_i / magStrength_f)
+
+    positronRadius = positronRadius * expansionFactor
+
+    pixelCalibration = 20e-3  # https://alphacpc05.cern.ch/elog/ALPHA/34611
+
+    pixelCalibration = pixelCalibration * 2 / (H + W)
+
+    beExpansion = np.sqrt(a * b) / positronRadius
+
+    Rs = np.array(Rs) / beExpansion * pixelCalibration
+
+    def gaussian(x, A, mu, sigma, C):
+        return A * np.exp(-0.5 * ((x - mu) / sigma)**2) + C
+
+    params, opt = curve_fit(gaussian, Rs, NNIs)
+
+    xfit = np.linspace(min(Rs), max(Rs), 500)
+    yfit = [gaussian(x, params[0], params[1], params[2], params[3])
+            for x in xfit]
+
+    plt.plot(Rs, NNIs_sm, '+', color='black')
+    plt.plot(xfit, yfit)
+    plt.xlabel("Distance from Plasma Center [mm]")
+    plt.ylabel("Net Intensity")
+    plt.title("Radial NNI Profile")
+    plt.grid(True)
+    plt.show()
+
+    ############
 
     # Split .tif extension (eg. 1027_36.322.tif to 1027_36.322)
     base_name = os.path.splitext(original_mcp_path)[0]
 
     # Save radial profile as txt
     out_path = os.path.join(mcp_analysis_dir, f"radial_profile{base_name}.txt")
-    np.savetxt(out_path, np.column_stack([radius_centers, density]), fmt="%.10f\t%.10f")
+    np.savetxt(out_path, np.column_stack(
+        [radius_centers, density]), fmt="%.10f\t%.10f")
     print("Radial profile saved to", out_path)
 
     summary_path = os.path.join(mcp_analysis_dir, "image_analysis_summary.txt")
@@ -344,5 +484,5 @@ def mcp_image_analyzer(original_mcp_path, run_number):
         f.write(f"Semi-axes (a, b): ({a:.4f}, {b:.4f})\n")
         f.write(f"Ellipse angle (theta, degrees): {np.degrees(theta):.4f}\n")
         f.write(f"Net intensity (NNI): {intensity:.4e}\n")
-        
+
     print("MCP image analysis summary saved to", summary_path)

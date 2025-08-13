@@ -1,0 +1,6 @@
+=== MCP Image Fitting Summary ===
+Original MCP image used 1129_40.396.tif
+Ellipse center (xc, yc): (697.2572, 800.7079)
+Semi-axes (a, b): (24.9028, 9.2772)
+Ellipse angle (theta, degrees): 124.7303
+Net intensity (NNI): 7.9319e+06

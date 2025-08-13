@@ -335,6 +335,12 @@ if((iout%20) == 0)
   //output line integral of the positron and ion density
   sprintf(fnm2,"%s00%s",tmplt9,suffx) ;
   outgor = fopen(fnm2,"w") ;
+
+  if (!outgor) {
+      perror("fopen failed for 2spc_z_int00.dat");
+      exit(1);
+  }
+
   for(j = 0 ; j < kmaxr ; j++) {
     sumden = 0.0 ; densmax = 0.0 ;
     for(i = kmin ; i < kmax ; i++) {
